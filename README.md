@@ -1,3 +1,6 @@
+Adaptation of Pierluigi Ferrari's work in Keras with Tensorflow 2 
+https://github.com/pierluigiferrari/ssd_keras
+
 ## SSD: Single-Shot MultiBox Detector implementation in Keras
 ---
 ### Contents
