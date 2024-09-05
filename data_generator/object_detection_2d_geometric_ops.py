@@ -21,8 +21,42 @@ from __future__ import division
 import numpy as np
 import cv2
 import random
+import matplotlib.pyplot as plt
+import scipy.ndimage as ndimage
+from PIL import Image
 
 from data_generator.object_detection_2d_image_boxes_validation_utils import BoxFilter, ImageValidator
+
+def image_resize(image, width = None, height = None, inter = cv2.INTER_AREA):
+    # initialize the dimensions of the image to be resized and
+    # grab the image size
+    dim = None
+    (h, w) = image.shape[:2]
+
+    # if both the width and height are None, then return the
+    # original image
+    if width is None and height is None:
+        return image
+
+    # check to see if the width is None
+    if width is None:
+        # calculate the ratio of the height and construct the
+        # dimensions
+        r = height / float(h)
+        dim = (int(w * r), height)
+
+    # otherwise, the height is None
+    else:
+        # calculate the ratio of the width and construct the
+        # dimensions
+        r = width / float(w)
+        dim = (width, int(h * r))
+
+    # resize the image
+    resized = cv2.resize(image, dim, interpolation = inter)
+
+    # return the resized image
+    return resized
 
 class Resize:
     '''
@@ -772,6 +806,122 @@ class RandomRotate:
             self.rotate.labels_format = self.labels_format
             return self.rotate(image, labels)
 
+        elif labels is None:
+            return image
+
+        else:
+            return image, labels
+
+
+class Creation:
+
+    def __init__(self,
+                 image,
+                 labels,
+                 prob = 0.5,
+                 labels_format={'class_id': 0, 'xmin': 1, 'ymin': 2, 'xmax': 3, 'ymax': 4}):
+
+        self.prob = prob
+        self.filenames = np.array(image)
+        self.labels = np.array(labels)
+        backgrounds = []
+        for i in range(1,11):
+            #back = plt.imread(R'/workdir/data/fond/fond'+str(i)+'.jpg')
+            back = plt.imread(R'C:\Users\Mazauric\Documents\creation_image\fond\fond'+str(i)+'.jpg')
+            backgrounds.append(back)
+        self.backgrounds = backgrounds
+        self.labels_format = labels_format
+
+    def image_resize(image, width = None, height = None, inter = cv2.INTER_AREA):
+        # initialize the dimensions of the image to be resized and
+        # grab the image size
+        dim = None
+        (h, w) = image.shape[:2]
+
+        # if both the width and height are None, then return the
+        # original image
+        if width is None and height is None:
+            return image
+
+        # check to see if the width is None
+        if width is None:
+            # calculate the ratio of the height and construct the
+            # dimensions
+            r = height / float(h)
+            dim = (int(w * r), height)
+
+        # otherwise, the height is None
+        else:
+            # calculate the ratio of the width and construct the
+            # dimensions
+            r = width / float(w)
+            dim = (width, int(h * r))
+
+        # resize the image
+        resized = cv2.resize(image, dim, interpolation = inter)
+
+        # return the resized image
+        return resized
+
+    def __call__(self, image, labels=None):
+        p = np.random.uniform(0,1)
+        if p >= (1.0-self.prob):
+            index = np.random.randint(0, len(self.filenames), 4)
+            files = self.filenames[index]
+            label = self.labels[index]
+
+            sizeX = 1600
+            sizeY = 1200
+            num_fond = str(np.random.randint(1,11))
+            #res = Image.open('/workdir/data/fond/fond'+num_fond+'.jpg')
+            res = Image.open(R'C:\Users\Mazauric\Documents\creation_image\fond\fond'+num_fond+'.jpg')
+            angle = [0, 90, 180, 270]
+            rotate = np.random.choice(angle)
+            res = res.rotate(rotate, expand = True)
+            res = res.resize((1600, 1200))
+            compteur = 0
+            labels_crop = []
+
+            for file in files:
+                xmin = label[compteur][0][1]
+                ymin = label[compteur][0][2]
+                xmax = label[compteur][0][3]
+                ymax = label[compteur][0][4]
+                width = xmax - xmin
+                height = ymax - ymin
+
+                ticket = Image.open(file[:-4] + '.jpg')
+                ticket_crop = ticket.crop((xmin, ymin, xmax, ymax))
+
+                width = ticket_crop.size[0]
+                height = ticket_crop.size[1]
+
+                ratio = width/height
+                """if width < height:
+                    new_width = 300
+                    new_height = int(new_width/ratio)
+                else:
+                    new_height = 300
+                    new_width = int(new_height*ratio)"""
+                new_width = 300
+                new_height = int(new_width/ratio)
+                ticket_crop = ticket_crop.resize((new_width, new_height))
+
+                res.paste(ticket_crop, (compteur*new_width + (compteur+1)*75, 100))
+
+                xmin = compteur*new_width + (compteur+1)*75
+                xmax = xmin + new_width
+                ymin = 100
+                ymax = ymin + new_height
+
+                labels_crop.append([1, xmin, ymin, xmax, ymax])
+
+                compteur += 1
+
+                res_crop = np.asarray(res)
+
+            return res_crop, labels_crop
+        
         elif labels is None:
             return image
 

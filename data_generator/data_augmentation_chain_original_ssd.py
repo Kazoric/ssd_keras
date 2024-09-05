@@ -23,7 +23,7 @@ import inspect
 
 from data_generator.object_detection_2d_photometric_ops import ConvertColor, ConvertDataType, ConvertTo3Channels, RandomBrightness, RandomContrast, RandomHue, RandomSaturation, RandomChannelSwap
 from data_generator.object_detection_2d_patch_sampling_ops import PatchCoordinateGenerator, RandomPatch, RandomPatchInf
-from data_generator.object_detection_2d_geometric_ops import ResizeRandomInterp, RandomFlip
+from data_generator.object_detection_2d_geometric_ops import ResizeRandomInterp, RandomFlip, RandomRotate, RandomScale, Creation
 from data_generator.object_detection_2d_image_boxes_validation_utils import BoundGenerator, BoxFilter, ImageValidator
 
 class SSDRandomCrop:
@@ -205,6 +205,15 @@ class SSDPhotometricDistortions:
                 image, labels = transform(image, labels)
             return image, labels
 
+class SSDDataCreation:
+    
+    def __init__(self, image, labels):
+        self.creation = Creation(image, labels)
+
+    def __call__(self, image, labels):
+        image, labels = self.creation(image, labels)
+        return image, labels
+
 class SSDDataAugmentation:
     '''
     Reproduces the data augmentation pipeline used in the training of the original
@@ -233,6 +242,7 @@ class SSDDataAugmentation:
         self.expand = SSDExpand(background=background, labels_format=self.labels_format)
         self.random_crop = SSDRandomCrop(labels_format=self.labels_format)
         self.random_flip = RandomFlip(dim='horizontal', prob=0.5, labels_format=self.labels_format)
+        #self.data_creation = SSDDataCreation()
 
         # This box filter makes sure that the resized images don't contain any degenerate boxes.
         # Resizing the images could lead the boxes to becomes smaller. For boxes that are already
@@ -271,8 +281,11 @@ class SSDDataAugmentation:
             if return_inverter and ('return_inverter' in inspect.signature(transform).parameters):
                 image, labels, inverter = transform(image, labels, return_inverter=True)
                 inverters.append(inverter)
+                #print(labels)
             else:
+                #print(transform)
                 image, labels = transform(image, labels)
+                #print(labels)
 
         if return_inverter:
             return image, labels, inverters[::-1]

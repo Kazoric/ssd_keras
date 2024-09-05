@@ -89,6 +89,7 @@ class Evaluator:
         self.cumulative_precisions = None # "Cumulative" means that the i-th element in each list represents the precision for the first i highest condidence predictions for that class.
         self.cumulative_recalls = None # "Cumulative" means that the i-th element in each list represents the recall for the first i highest condidence predictions for that class.
         self.average_precisions = None
+        self.average_recalls = None
         self.mean_average_precision = None
 
     def __call__(self,
@@ -107,7 +108,7 @@ class Evaluator:
                  return_recalls=False,
                  return_average_precisions=False,
                  verbose=True,
-                 decoding_confidence_thresh=0.01,
+                 decoding_confidence_thresh=0.8,
                  decoding_iou_threshold=0.45,
                  decoding_top_k=200,
                  decoding_pred_coords='centroids',
@@ -234,6 +235,11 @@ class Evaluator:
                                         verbose=verbose,
                                         ret=False)
 
+        self.compute_average_recalls(mode=average_precision_mode,
+                                        num_recall_points=num_recall_points,
+                                        verbose=verbose,
+                                        ret=False)
+
         #############################################################################################
         # Compute the mean average precision.
         #############################################################################################
@@ -245,6 +251,7 @@ class Evaluator:
         # Compile the returns.
         if return_precisions or return_recalls or return_average_precisions:
             ret = [mean_average_precision]
+            ret.append(self.average_recalls)
             if return_average_precisions:
                 ret.append(self.average_precisions)
             if return_precisions:
@@ -617,12 +624,16 @@ class Evaluator:
                 print("No predictions for class {}/{}".format(class_id, self.n_classes))
                 true_positives.append(true_pos)
                 false_positives.append(false_pos)
+                cumulative_true_pos = np.cumsum(true_pos)
+                cumulative_false_pos = np.cumsum(false_pos)
+                cumulative_true_positives.append(cumulative_true_pos)
+                cumulative_false_positives.append(cumulative_false_pos)
                 continue
 
             # Convert the predictions list for this class into a structured array so that we can sort it by confidence.
 
             # Get the number of characters needed to store the image ID strings in the structured array.
-            num_chars_per_image_id = len(str(predictions[0][0])) + 6 # Keep a few characters buffer in case some image IDs are longer than others.
+            num_chars_per_image_id = len(str(predictions[0][0])) + 16 # Keep a few characters buffer in case some image IDs are longer than others.
             # Create the data type for the structured array.
             preds_data_type = np.dtype([('image_id', 'U{}'.format(num_chars_per_image_id)),
                                         ('confidence', 'f4'),
@@ -650,7 +661,9 @@ class Evaluator:
             for i in tr:
 
                 prediction = predictions_sorted[i]
+                #print(prediction)
                 image_id = prediction['image_id']
+                #image_id = "b'"+image_id+"'"
                 pred_box = np.asarray(list(prediction[['xmin', 'ymin', 'xmax', 'ymax']])) # Convert the structured array element to a regular array.
 
                 # Get the relevant ground truth boxes for this prediction,
@@ -659,6 +672,8 @@ class Evaluator:
 
                 # The ground truth could either be a tuple with `(ground_truth_boxes, eval_neutral_boxes)`
                 # or only `ground_truth_boxes`.
+                #print(image_id)
+                #print(ground_truth[image_id])
                 if ignore_neutral_boxes and eval_neutral_available:
                     gt, eval_neutral = ground_truth[image_id]
                 else:
@@ -904,3 +919,108 @@ class Evaluator:
 
         if ret:
             return mean_average_precision
+
+
+    ##############
+    def compute_average_recalls(self, mode='sample', num_recall_points=11, verbose=True, ret=False):
+            '''
+            Computes the average precision for each class.
+
+            Can compute the Pascal-VOC-style average precision in both the pre-2010 (k-point sampling)
+            and post-2010 (integration) algorithm versions.
+
+            Note that `compute_precision_recall()` must be called before calling this method.
+
+            Arguments:
+                mode (str, optional): Can be either 'sample' or 'integrate'. In the case of 'sample', the average precision will be computed
+                    according to the Pascal VOC formula that was used up until VOC 2009, where the precision will be sampled for `num_recall_points`
+                    recall values. In the case of 'integrate', the average precision will be computed according to the Pascal VOC formula that
+                    was used from VOC 2010 onward, where the average precision will be computed by numerically integrating over the whole
+                    preciscion-recall curve instead of sampling individual points from it. 'integrate' mode is basically just the limit case
+                    of 'sample' mode as the number of sample points increases. For details, see the references below.
+                num_recall_points (int, optional): Only relevant if mode is 'sample'. The number of points to sample from the precision-recall-curve
+                    to compute the average precisions. In other words, this is the number of equidistant recall values for which the resulting
+                    precision will be computed. 11 points is the value used in the official Pascal VOC pre-2010 detection evaluation algorithm.
+                verbose (bool, optional): If `True`, will print out the progress during runtime.
+                ret (bool, optional): If `True`, returns the average precisions.
+
+            Returns:
+                None by default. Optionally, a list containing average precision for each class.
+
+            References:
+                http://host.robots.ox.ac.uk/pascal/VOC/voc2012/htmldoc/devkit_doc.html#sec:ap
+            '''
+
+            if (self.cumulative_precisions is None) or (self.cumulative_recalls is None):
+                raise ValueError("Precisions and recalls not available. You must run `compute_precision_recall()` before you call this method.")
+
+            if not (mode in {'sample', 'integrate'}):
+                raise ValueError("`mode` can be either 'sample' or 'integrate', but received '{}'".format(mode))
+
+            average_recalls = [0.0]
+
+            # Iterate over all classes.
+            for class_id in range(1, self.n_classes + 1):
+
+                if verbose:
+                    print("Computing average precision, class {}/{}".format(class_id, self.n_classes))
+
+                cumulative_precision = self.cumulative_precisions[class_id]
+                cumulative_recall = self.cumulative_recalls[class_id]
+                average_recall = 0.0
+
+                if mode == 'sample':
+
+                    for t in np.linspace(start=0, stop=1, num=num_recall_points, endpoint=True):
+
+                        cum_prec_precision_greater_t = cumulative_recall[cumulative_precision >= t]
+
+                        if cum_prec_precision_greater_t.size == 0:
+                            recall = 0.0
+                        else:
+                            recall = np.amax(cum_prec_precision_greater_t)
+
+                        average_recall += recall
+
+                    average_recall /= num_recall_points
+
+                elif mode == 'integrate':
+
+                    # We will compute the precision at all unique recall values.
+                    unique_recalls, unique_recall_indices, unique_recall_counts = np.unique(cumulative_recall, return_index=True, return_counts=True)
+
+                    # Store the maximal precision for each recall value and the absolute difference
+                    # between any two unique recal values in the lists below. The products of these
+                    # two nummbers constitute the rectangular areas whose sum will be our numerical
+                    # integral.
+                    maximal_precisions = np.zeros_like(unique_recalls)
+                    recall_deltas = np.zeros_like(unique_recalls)
+
+                    # Iterate over all unique recall values in reverse order. This saves a lot of computation:
+                    # For each unique recall value `r`, we want to get the maximal precision value obtained
+                    # for any recall value `r* >= r`. Once we know the maximal precision for the last `k` recall
+                    # values after a given iteration, then in the next iteration, in order compute the maximal
+                    # precisions for the last `l > k` recall values, we only need to compute the maximal precision
+                    # for `l - k` recall values and then take the maximum between that and the previously computed
+                    # maximum instead of computing the maximum over all `l` values.
+                    # We skip the very last recall value, since the precision after between the last recall value
+                    # recall 1.0 is defined to be zero.
+                    for i in range(len(unique_recalls)-2, -1, -1):
+                        begin = unique_recall_indices[i]
+                        end   = unique_recall_indices[i + 1]
+                        # When computing the maximal precisions, use the maximum of the previous iteration to
+                        # avoid unnecessary repeated computation over the same precision values.
+                        # The maximal precisions are the heights of the rectangle areas of our integral under
+                        # the precision-recall curve.
+                        maximal_precisions[i] = np.maximum(np.amax(cumulative_recall[begin:end]), maximal_precisions[i + 1])
+                        # The differences between two adjacent recall values are the widths of our rectangle areas.
+                        recall_deltas[i] = unique_recalls[i + 1] - unique_recalls[i]
+
+                    average_recall = np.sum(maximal_precisions * recall_deltas)
+
+                average_recalls.append(average_recall)
+
+            self.average_recalls = average_recalls
+
+            if ret:
+                return average_recalls
